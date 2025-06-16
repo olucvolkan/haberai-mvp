@@ -34,6 +34,34 @@ Admin Panel (Next.js) ← Supabase PostgreSQL ← Analysis Engine
 - **Frontend**: Next.js 14 + Tailwind CSS
 - **Authentication**: Supabase Auth
 
+## 📝 Content Generation Interface
+
+### User Input for News Generation
+The platform uses a simple, intelligent input system for content generation:
+
+**Primary Input Method:**
+```
+"Olay hakkında kısaca bilgi verin"
+```
+
+**Example Inputs:**
+- `"TCMB politika faizini %17'ye yükseltti"`
+- `"İstanbul'da metro grevi başladı"`
+- `"AK Parti ekonomik reform paketini açıkladı"`
+- `"Galatasaray Şampiyonlar Ligi'ne katıldı"`
+
+**AI-Enhanced Processing:**
+1. **Auto-Detection**: System automatically identifies entities, category, and event type
+2. **Smart Suggestions**: Provides different angle options (breaking news, analysis, opinion)
+3. **Channel Alignment**: Adapts content based on channel's political stance and writing style
+4. **Similar Events**: References historical coverage for consistency
+
+**Enhanced Input Options** (Optional):
+- Target audience selection
+- Desired content length
+- Specific points to emphasize
+- Topics to avoid
+
 ## 📊 Database Schema
 
 ### Core Tables
@@ -89,6 +117,17 @@ POST   /api/channels/{id}/analyze # Analyze political stance
 POST   /api/generate              # Generate news content
 GET    /api/similar-events        # Find similar historical events
 GET    /api/generate/history      # Generation history
+```
+
+**Content Generation Request Example:**
+```json
+{
+  "channelId": "uuid",
+  "topic": "TCMB politika faizini %17'ye yükseltti",
+  "contentType": "full",
+  "targetAudience": "general",
+  "desiredLength": "medium"
+}
 ```
 
 ## 🏃‍♂️ Quick Start
