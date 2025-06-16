@@ -1,0 +1,53 @@
+{
+  "name": "haberai-mvp",
+  "version": "1.0.0",
+  "description": "🤖 AI-powered news content generation platform that analyzes political stance and language patterns of news channels",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "type-check": "tsc --noEmit",
+    "supabase:start": "npx supabase start",
+    "supabase:stop": "npx supabase stop",
+    "supabase:status": "npx supabase status",
+    "supabase:reset": "npx supabase db reset",
+    "supabase:gen-types": "npx supabase gen types typescript --local > src/types/supabase.ts",
+    "supabase:functions:deploy": "npx supabase functions deploy --no-verify-jwt",
+    "deploy:staging": "vercel --target staging",
+    "deploy:production": "vercel --prod",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "ai",
+    "news",
+    "content-generation",
+    "political-analysis",
+    "supabase",
+    "nextjs"
+  ],
+  "author": "HaberAI Team",
+  "license": "MIT",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.38.4",
+    "@types/node": "^20.10.5",
+    "@types/react": "^18.2.45",
+    "next": "^14.0.4",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "tailwindcss": "^3.3.6",
+    "typescript": "^5.3.3"
+  },
+  "devDependencies": {
+    "@types/react-dom": "^18.2.18",
+    "autoprefixer": "^10.4.16",
+    "postcss": "^8.4.32",
+    "eslint": "^8.56.0",
+    "eslint-config-next": "^14.0.4"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
+  }
+}
