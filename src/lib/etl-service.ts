@@ -1,16 +1,36 @@
+import type { Database } from '@/types/database'
 import { CreateChannelRequest } from '@/types/database'
-import { MigrationJob, MongoPost, TransformationResult } from '@/types/mongodb'
+import { MigrationJob, MigrationResult, MongoPost, TransformationResult } from '@/types/mongodb'
+import { createClient } from '@supabase/supabase-js'
 import { MongoDBService, cleanHtmlContent, validatePostContent } from './mongodb'
 import { newsArticlesApi, newsChannelsApi } from './supabase'
+import { NewsArticleVector, VectorService } from './vector-service'
 
 export class ETLService {
   private mongoService: MongoDBService
+  private supabase: ReturnType<typeof createClient<Database>>
+  private vectorService?: VectorService
   private batchSize: number
   private defaultChannelId: string | null = null
 
-  constructor(mongoService: MongoDBService, batchSize = 50) {
+  constructor(
+    mongoService: MongoDBService, 
+    batchSize: number = 50,
+    vectorService?: VectorService
+  ) {
     this.mongoService = mongoService
     this.batchSize = batchSize
+    this.vectorService = vectorService
+
+    // Initialize Supabase client
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+    const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+
+    if (!supabaseUrl || !supabaseKey) {
+      throw new Error('Missing Supabase configuration')
+    }
+
+    this.supabase = createClient<Database>(supabaseUrl, supabaseKey)
   }
 
   // Initialize or get default channel for migration
@@ -335,6 +355,263 @@ export class ETLService {
     } catch (error) {
       console.error('Error getting migration stats:', error)
       throw error
+    }
+  }
+
+  /**
+   * Transform MongoDB post to vector format
+   */
+  private transformToVector(
+    post: MongoPost, 
+    channelId: string,
+    supabaseArticleId: string
+  ): NewsArticleVector | null {
+    try {
+      // Validate required fields
+      if (!post.title || !post.content?.text) {
+        return null
+      }
+
+      const cleanContent = cleanHtmlContent(post.content.text)
+      if (cleanContent.length < 50) {
+        return null
+      }
+
+      return {
+        id: supabaseArticleId, // Use Supabase UUID as vector ID
+        channel_id: channelId,
+        title: post.title,
+        content: cleanContent,
+        published_at: post.published_at || post.created_at,
+        categories: post.categories || [],
+        topics: post.topics || [],
+        political_score: undefined, // Will be calculated later
+        event_category: this.categorizeEvent(post.title, cleanContent),
+        source_url: post.slug ? `/${post.slug}` : undefined,
+      }
+    } catch (error) {
+      console.error('Error transforming post to vector:', error)
+      return null
+    }
+  }
+
+  /**
+   * Categorize event type based on title and content
+   */
+  private categorizeEvent(title: string, content: string): string {
+    const text = `${title} ${content}`.toLowerCase()
+    
+    // Political events
+    if (text.match(/\b(seçim|parti|milletvekili|başkan|hükümet|meclis|politika)\b/)) {
+      return 'politics'
+    }
+    
+    // Economic events
+    if (text.match(/\b(ekonomi|dolar|euro|borsa|enflasyon|faiz|tcmb|merkez bankası)\b/)) {
+      return 'economy'
+    }
+    
+    // Sports events
+    if (text.match(/\b(futbol|basketbol|spor|maç|takım|galatasaray|fenerbahçe|beşiktaş)\b/)) {
+      return 'sports'
+    }
+    
+    // Technology events
+    if (text.match(/\b(teknoloji|yapay zeka|internet|bilgisayar|telefon|uygulama)\b/)) {
+      return 'technology'
+    }
+    
+    // Health events
+    if (text.match(/\b(sağlık|hastane|doktor|tedavi|aşı|covid|corona)\b/)) {
+      return 'health'
+    }
+    
+    // Default category
+    return 'general'
+  }
+
+  /**
+   * Migrate posts with vector database integration
+   */
+  async migrateWithVectors(
+    channelId: string,
+    options: {
+      limit?: number
+      offset?: number
+      dateRange?: { start: Date; end: Date }
+      dryRun?: boolean
+      enableVectors?: boolean
+    } = {}
+  ): Promise<MigrationResult> {
+    const startTime = Date.now()
+    const result: MigrationResult = {
+      success: true,
+      processed: 0,
+      inserted: 0,
+      skipped: 0,
+      errors: 0,
+      duration: 0,
+      error_details: []
+    }
+
+    try {
+      console.log(`🚀 Starting migration with vector integration...`)
+      console.log(`   Channel ID: ${channelId}`)
+      console.log(`   Batch Size: ${this.batchSize}`)
+      console.log(`   Vector Integration: ${options.enableVectors ? 'ENABLED' : 'DISABLED'}`)
+
+      // Initialize vector collection if enabled
+      if (options.enableVectors && this.vectorService) {
+        console.log('📦 Initializing vector collection...')
+        await this.vectorService.initializeCollection()
+      }
+
+      // Get total count for progress tracking
+      const totalPosts = await this.mongoService.getPostCount(
+        options.dateRange?.start,
+        options.dateRange?.end
+      )
+      console.log(`📊 Total posts to process: ${totalPosts}`)
+
+      let currentOffset = options.offset || 0
+      let vectorBatch: NewsArticleVector[] = []
+
+      while (currentOffset < totalPosts && (!options.limit || result.processed < options.limit)) {
+        const remainingLimit = options.limit ? Math.min(this.batchSize, options.limit - result.processed) : this.batchSize
+        
+        console.log(`📄 Processing batch: ${currentOffset + 1}-${currentOffset + remainingLimit}`)
+
+        // Fetch batch from MongoDB
+        const posts = await this.mongoService.fetchPosts({
+          limit: remainingLimit,
+          skip: currentOffset,
+          fromDate: options.dateRange?.start,
+          toDate: options.dateRange?.end
+        })
+
+        if (posts.length === 0) {
+          console.log('✅ No more posts to process')
+          break
+        }
+
+        // Process batch
+        const batchResults: any[] = []
+        
+        for (const post of posts) {
+          result.processed++
+
+          // Transform post
+          const transformation = this.transformPost(post, channelId)
+          
+          if (transformation.skipped) {
+            result.skipped++
+            continue
+          }
+
+          if (!transformation.success || !transformation.data) {
+            result.errors++
+            result.error_details.push({
+              post_id: post._id.toString(),
+              error: transformation.error || 'Unknown transformation error'
+            })
+            continue
+          }
+
+          batchResults.push(transformation.data)
+        }
+
+        // Insert to Supabase if not dry run
+        if (!options.dryRun && batchResults.length > 0) {
+          try {
+            const { data: insertedArticles, error } = await this.supabase
+              .from('news_articles')
+              .insert(batchResults)
+              .select('id, title, content, published_at, categories, topics')
+
+            if (error) {
+              console.error('❌ Supabase insert error:', error)
+              result.errors += batchResults.length
+              result.error_details.push({
+                post_id: 'batch',
+                error: error.message
+              })
+            } else {
+              result.inserted += insertedArticles?.length || 0
+              console.log(`✅ Inserted ${insertedArticles?.length} articles to Supabase`)
+
+              // Prepare vector batch if enabled
+              if (options.enableVectors && this.vectorService && insertedArticles) {
+                for (let i = 0; i < insertedArticles.length; i++) {
+                  const article = insertedArticles[i]
+                  const originalPost = posts[i]
+                  
+                  const vectorArticle = this.transformToVector(originalPost, channelId, article.id)
+                  if (vectorArticle) {
+                    vectorBatch.push(vectorArticle)
+                  }
+                }
+
+                // Process vector batch when it reaches batch size
+                if (vectorBatch.length >= this.batchSize) {
+                  console.log(`🔄 Processing vector batch of ${vectorBatch.length} articles...`)
+                  await this.vectorService.storeArticlesBatch(vectorBatch)
+                  vectorBatch = []
+                }
+              }
+            }
+          } catch (insertError) {
+            console.error('❌ Insert error:', insertError)
+            result.errors += batchResults.length
+            result.error_details.push({
+              post_id: 'batch',
+              error: insertError instanceof Error ? insertError.message : 'Unknown insert error'
+            })
+          }
+        } else if (options.dryRun) {
+          result.inserted += batchResults.length
+          console.log(`🔍 Dry run: Would insert ${batchResults.length} articles`)
+        }
+
+        currentOffset += posts.length
+
+        // Progress update
+        const progress = Math.round((result.processed / totalPosts) * 100)
+        console.log(`📈 Progress: ${progress}% (${result.processed}/${totalPosts})`)
+      }
+
+      // Process remaining vector batch
+      if (options.enableVectors && this.vectorService && vectorBatch.length > 0) {
+        console.log(`🔄 Processing final vector batch of ${vectorBatch.length} articles...`)
+        await this.vectorService.storeArticlesBatch(vectorBatch)
+      }
+
+      result.duration = Date.now() - startTime
+      result.success = result.errors === 0
+
+      console.log(`🎯 Migration completed!`)
+      console.log(`   Duration: ${Math.round(result.duration / 1000)}s`)
+      console.log(`   Processed: ${result.processed}`)
+      console.log(`   Inserted: ${result.inserted}`)
+      console.log(`   Skipped: ${result.skipped}`)
+      console.log(`   Errors: ${result.errors}`)
+
+      if (options.enableVectors && this.vectorService) {
+        const stats = await this.vectorService.getCollectionStats()
+        console.log(`   Vector DB: ${stats.total_points} total points`)
+      }
+
+      return result
+
+    } catch (error) {
+      result.success = false
+      result.duration = Date.now() - startTime
+      result.error_details.push({
+        post_id: 'migration',
+        error: error instanceof Error ? error.message : 'Unknown migration error'
+      })
+
+      console.error('❌ Migration failed:', error)
+      return result
     }
   }
 } 

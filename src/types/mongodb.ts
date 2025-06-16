@@ -113,4 +113,18 @@ export interface TransformationResult {
   error?: string
   skipped?: boolean
   skip_reason?: string
+}
+
+// Migration result
+export interface MigrationResult {
+  success: boolean
+  processed: number
+  inserted: number
+  skipped: number
+  errors: number
+  duration: number
+  error_details: Array<{
+    post_id: string
+    error: string
+  }>
 } 

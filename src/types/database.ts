@@ -118,4 +118,37 @@ export interface NewsEmbeddingPayload {
   content_preview: string;
   published_at?: string;
   analysis_completed: boolean;
+}
+
+// Supabase Database type
+export type Database = {
+  public: {
+    Tables: {
+      news_channels: {
+        Row: NewsChannel
+        Insert: Omit<NewsChannel, 'id' | 'created_at' | 'updated_at'>
+        Update: Partial<Omit<NewsChannel, 'id' | 'created_at' | 'updated_at'>>
+      }
+      channel_profiles: {
+        Row: ChannelProfile
+        Insert: Omit<ChannelProfile, 'id' | 'created_at' | 'updated_at'>
+        Update: Partial<Omit<ChannelProfile, 'id' | 'created_at' | 'updated_at'>>
+      }
+      news_articles: {
+        Row: NewsArticle
+        Insert: Omit<NewsArticle, 'id' | 'created_at' | 'updated_at'>
+        Update: Partial<Omit<NewsArticle, 'id' | 'created_at' | 'updated_at'>>
+      }
+      event_templates: {
+        Row: EventTemplate
+        Insert: Omit<EventTemplate, 'id' | 'created_at' | 'updated_at'>
+        Update: Partial<Omit<EventTemplate, 'id' | 'created_at' | 'updated_at'>>
+      }
+      generated_content: {
+        Row: GeneratedContent
+        Insert: Omit<GeneratedContent, 'id' | 'created_at' | 'updated_at'>
+        Update: Partial<Omit<GeneratedContent, 'id' | 'created_at' | 'updated_at'>>
+      }
+    }
+  }
 } 

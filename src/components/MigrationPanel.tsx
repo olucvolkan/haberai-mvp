@@ -26,7 +26,8 @@ export default function MigrationPanel() {
     fromDate: '',
     toDate: '',
     batchSize: 50,
-    dryRun: false
+    dryRun: false,
+    enableVectors: false
   })
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -98,7 +99,8 @@ export default function MigrationPanel() {
       fromDate: '',
       toDate: '',
       batchSize: 50,
-      dryRun: false
+      dryRun: false,
+      enableVectors: false
     })
   }
 
@@ -226,7 +228,7 @@ export default function MigrationPanel() {
             </div>
           </div>
           
-          <div className="mt-4">
+          <div className="mt-4 space-y-3">
             <label className="flex items-center">
               <input
                 type="checkbox"
@@ -239,6 +241,31 @@ export default function MigrationPanel() {
                 Dry Run (Test migration without inserting data)
               </span>
             </label>
+            
+            <div className="bg-gradient-to-r from-purple-50 to-blue-50 p-4 rounded-lg border border-purple-200">
+              <label className="flex items-start">
+                <input
+                  type="checkbox"
+                  name="enableVectors"
+                  checked={formData.enableVectors}
+                  onChange={handleInputChange}
+                  className="h-4 w-4 text-purple-600 focus:ring-purple-500 border-gray-300 rounded mt-0.5"
+                />
+                <div className="ml-3">
+                  <span className="text-sm font-medium text-purple-800">
+                    🚀 Enable Vector Database Integration
+                  </span>
+                  <p className="text-xs text-purple-600 mt-1">
+                    Generate embeddings for semantic search and AI analysis (requires OpenAI API key)
+                  </p>
+                  {formData.enableVectors && (
+                    <div className="mt-2 text-xs text-amber-600 bg-amber-50 p-2 rounded border border-amber-200">
+                      ⚠️ This will use OpenAI API credits for embedding generation
+                    </div>
+                  )}
+                </div>
+              </label>
+            </div>
           </div>
           
           <div className="mt-6 flex gap-3">
