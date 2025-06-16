@@ -9,26 +9,30 @@ HaberAI is an intelligent content generation platform that:
 - Generates consistent, channel-appropriate news content
 - Maintains editorial consistency across generated articles
 - Adapts writing style to match historical channel characteristics
+- **NEW**: Migrates existing news data from MongoDB databases
 
 ## 🏗️ System Architecture
 
 ```
-External News DB → Supabase Functions → Vector DB (Qdrant) → Content Generation
-                        ↓
-Admin Panel (Next.js) ← Supabase PostgreSQL ← Analysis Engine
+MongoDB Source DB → Migration Pipeline → Supabase PostgreSQL → Vector DB (Qdrant) → Content Generation
+                                              ↓
+                Admin Panel (Next.js) ← Analysis Engine ← News Articles Database
 ```
 
 ## 🚀 MVP Features
 
 ### Core Capabilities
-- [x] **Database Migration**: PostgreSQL → Vector DB data pipeline
+- [x] **Database Migration**: MongoDB → Supabase data pipeline with ETL processing
+- [x] **Data Validation**: Content quality checks and HTML cleaning
+- [x] **Batch Processing**: Efficient migration with progress tracking
 - [x] **Political Analysis**: Multi-dimensional political stance detection
 - [x] **Language Patterns**: Channel-specific writing style extraction
 - [x] **Content Generation**: Context-aware news article creation
-- [x] **Admin Interface**: Channel management and content generation UI
+- [x] **Admin Interface**: Channel management and migration monitoring UI
 
 ### Technical Stack
 - **Backend**: Supabase (PostgreSQL + Edge Functions)
+- **Source DB**: MongoDB migration support
 - **Vector DB**: Qdrant
 - **AI/ML**: OpenAI GPT-4 + Embeddings
 - **Frontend**: Next.js 14 + Tailwind CSS
@@ -150,6 +154,22 @@ cd haberai-mvp
 ```bash
 cp .env.example .env.local
 # Fill in your API keys and database URLs
+
+# Required Environment Variables:
+NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+
+# For MongoDB Migration (Phase 1)
+MONGODB_CONNECTION_STRING=mongodb://localhost:27017
+MONGODB_DATABASE_NAME=haberdb
+
+# For AI Analysis (Phase 2)
+OPENAI_API_KEY=your-openai-api-key
+
+# For Vector Search (Phase 3)
+QDRANT_URL=http://localhost:6333
+QDRANT_API_KEY=your-qdrant-api-key
 ```
 
 3. **Supabase Setup**
