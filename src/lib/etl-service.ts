@@ -1,80 +1,46 @@
-import type { Database } from '@/types/database'
-import { CreateChannelRequest } from '@/types/database'
-import { MigrationJob, MigrationResult, MongoPost, TransformationResult } from '@/types/mongodb'
-import { createClient } from '@supabase/supabase-js'
+import { MigrationResult, MongoPost } from '@/types/mongodb'
+import { randomUUID } from 'crypto'
+import dotenv from 'dotenv'
 import { MongoDBService, cleanHtmlContent, validatePostContent } from './mongodb'
-import { newsArticlesApi, newsChannelsApi } from './supabase'
 import { NewsArticleVector, VectorService } from './vector-service'
 
+// Load environment variables
+dotenv.config({ path: '.env.local' })
+
+// Vector-only ETL Service for direct MongoDB to Vector DB migration
 export class ETLService {
   private mongoService: MongoDBService
-  private supabase: ReturnType<typeof createClient<Database>>
-  private vectorService?: VectorService
+  private vectorService: VectorService
   private batchSize: number
-  private defaultChannelId: string | null = null
 
   constructor(
     mongoService: MongoDBService, 
-    batchSize: number = 50,
-    vectorService?: VectorService
+    batchSize: number = 500,
+    vectorService: VectorService
   ) {
     this.mongoService = mongoService
-    this.batchSize = batchSize
     this.vectorService = vectorService
-
-    // Initialize Supabase client
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-    const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-
-    if (!supabaseUrl || !supabaseKey) {
-      throw new Error('Missing Supabase configuration')
-    }
-
-    this.supabase = createClient<Database>(supabaseUrl, supabaseKey)
+    this.batchSize = batchSize
   }
 
-  // Initialize or get default channel for migration
-  async ensureDefaultChannel(channelName = 'MongoDB Import'): Promise<string> {
-    if (this.defaultChannelId) return this.defaultChannelId
-
-    try {
-      // Check if channel already exists
-      const channels = await newsChannelsApi.getAll()
-      const existingChannel = channels.find(c => c.name === channelName)
-      
-      if (existingChannel) {
-        this.defaultChannelId = existingChannel.id
-        return existingChannel.id
-      }
-
-      // Create new channel
-      const newChannelRequest: CreateChannelRequest = {
-        name: channelName,
-        source_db_config: {
-          type: 'mongodb',
-          database: process.env.MONGODB_DATABASE_NAME,
-          collections: ['posts', 'categories', 'topics'],
-          migrated_at: new Date().toISOString()
-        }
-      }
-
-      const newChannel = await newsChannelsApi.create(newChannelRequest)
-      this.defaultChannelId = newChannel.id
-      
-      console.log(`Created default channel: ${channelName} (${newChannel.id})`)
-      return newChannel.id
-    } catch (error) {
-      console.error('Error ensuring default channel:', error)
-      throw error
-    }
+  /**
+   * Generate a simple random UUID for vector storage
+   */
+  private generateRandomUUID(): string {
+    return randomUUID()
   }
 
-  // Transform MongoDB post to Supabase news article
-  transformPost(mongoPost: MongoPost, channelId: string): TransformationResult {
+  /**
+   * Transform MongoDB post to Vector format
+   */
+  transformPostToVector(mongoPost: MongoPost): { success: boolean; data?: NewsArticleVector; error?: string; skipped?: boolean; skip_reason?: string } {
     try {
-      // Validate post content first
+      console.log(`🔍 Transforming post: ${mongoPost._id}`)
+
+      // Validate post content
       const validation = validatePostContent(mongoPost)
       if (!validation.isValid) {
+        console.log(`❌ Validation failed: ${validation.issues.join(', ')}`)
         return {
           success: false,
           skipped: true,
@@ -82,316 +48,55 @@ export class ETLService {
         }
       }
 
-      // Extract and clean content
-      const rawContent = mongoPost.content?.text || ''
+      // Extract content from various possible fields
+      let rawContent = ''
+      if (mongoPost.content?.text) {
+        rawContent = mongoPost.content.text
+      } else if ((mongoPost as any).text) {
+        rawContent = (mongoPost as any).text
+      } else if ((mongoPost as any).body) {
+        rawContent = (mongoPost as any).body
+      } else if (mongoPost.summary) {
+        rawContent = mongoPost.summary
+      } else if (mongoPost.seo_description) {
+        rawContent = mongoPost.seo_description
+      }
+
+      // Clean HTML content
       const cleanContent = cleanHtmlContent(rawContent)
       
-      // Create summary from content if not provided
-      let summary = mongoPost.summary || mongoPost.seo_description || ''
-      if (!summary && cleanContent) {
-        // Create summary from first 200 characters
-        summary = cleanContent.substring(0, 200)
-        if (cleanContent.length > 200) {
-          summary += '...'
+      if (!cleanContent || cleanContent.trim().length < 5) {
+        return {
+          success: false,
+          skipped: true,
+          skip_reason: `Content too short after cleaning: ${cleanContent.length} characters`
         }
       }
 
-      // Build source metadata
-      const sourceMetadata = {
-        mongo_id: mongoPost._id.toString(),
-        integer_id: mongoPost.integer_id,
-        old_id: mongoPost.old_id,
-        slug: mongoPost.slug,
-        old_slug: mongoPost.old_slug,
+      // Create vector article data
+      const vectorArticle: NewsArticleVector = {
+        id: this.generateRandomUUID(), // Simple random UUID
+        channel_id: 'mongodb-import', // Default channel for vector storage
+        title: mongoPost.title,
+        content: cleanContent,
+        published_at: mongoPost.published_at || mongoPost.created_at,
         categories: mongoPost.categories || [],
         topics: mongoPost.topics || [],
-        hit_count: mongoPost.hit || 0,
-        seo_keywords: mongoPost.seo_keywords,
-        author_id: mongoPost.author_id,
-        source_id: mongoPost.source_id,
-        location: mongoPost.location,
-        is_old_record: mongoPost.is_old_record,
-        weight: mongoPost.weight,
-        show_on_mainpage: mongoPost.show_on_mainpage,
-        attachments: mongoPost.attachments,
-        original_raw_content: rawContent,
-        migration_timestamp: new Date().toISOString()
+        political_score: undefined, // Will be calculated by vector service
+        event_category: this.categorizeEvent(mongoPost.title, cleanContent),
+        source_url: mongoPost.slug ? `/${mongoPost.slug}` : undefined,
+        original_mongo_id: mongoPost._id.toString(), // Keep original MongoDB ID for reference
       }
 
       return {
         success: true,
-        data: {
-          title: mongoPost.title,
-          content: cleanContent,
-          summary: summary || undefined,
-          published_at: mongoPost.published_at,
-          channel_id: channelId,
-          source_metadata: sourceMetadata
-        }
+        data: vectorArticle
       }
     } catch (error) {
       return {
         success: false,
         error: `Transformation error: ${error instanceof Error ? error.message : 'Unknown error'}`
       }
-    }
-  }
-
-  // Process a batch of posts
-  async processBatch(posts: MongoPost[], channelId: string): Promise<{
-    successful: number
-    failed: number
-    skipped: number
-    errors: string[]
-  }> {
-    const results = {
-      successful: 0,
-      failed: 0,
-      skipped: 0,
-      errors: [] as string[]
-    }
-
-    for (const post of posts) {
-      try {
-        const transformation = this.transformPost(post, channelId)
-        
-        if (!transformation.success) {
-          if (transformation.skipped) {
-            results.skipped++
-            console.log(`Skipped post ${post._id}: ${transformation.skip_reason}`)
-          } else {
-            results.failed++
-            results.errors.push(`Post ${post._id}: ${transformation.error}`)
-          }
-          continue
-        }
-
-        if (!transformation.data) {
-          results.failed++
-          results.errors.push(`Post ${post._id}: No transformation data`)
-          continue
-        }
-
-        // Create article in Supabase
-        const articleData = {
-          ...transformation.data,
-          analysis_completed: false,
-          migrated_at: new Date().toISOString()
-        }
-
-        await newsArticlesApi.create(articleData as any)
-        results.successful++
-        
-        console.log(`Successfully migrated post: ${post.title} (${post._id})`)
-      } catch (error) {
-        results.failed++
-        const errorMsg = `Post ${post._id}: ${error instanceof Error ? error.message : 'Unknown error'}`
-        results.errors.push(errorMsg)
-        console.error('Error processing post:', errorMsg)
-      }
-    }
-
-    return results
-  }
-
-  // Full migration process
-  async migrateAllPosts(options: {
-    fromDate?: Date
-    toDate?: Date
-    channelName?: string
-    dryRun?: boolean
-  } = {}): Promise<MigrationJob> {
-    const { fromDate, toDate, channelName = 'MongoDB Import', dryRun = false } = options
-
-    console.log('Starting MongoDB to Supabase migration...')
-    console.log('Options:', { fromDate, toDate, channelName, dryRun })
-
-    // Connect to MongoDB
-    await this.mongoService.connect()
-
-    try {
-      // Ensure channel exists
-      const channelId = await this.ensureDefaultChannel(channelName)
-      
-      // Get total count for progress tracking
-      const totalCount = await this.mongoService.getPostCount(fromDate, toDate)
-      console.log(`Found ${totalCount} posts to migrate`)
-
-      // Initialize migration job tracking
-      const migrationJob: MigrationJob = {
-        id: `migration_${Date.now()}`,
-        source_db: 'mongodb',
-        target_channel_id: channelId,
-        status: 'running',
-        total_records: totalCount,
-        processed_records: 0,
-        failed_records: 0,
-        started_at: new Date(),
-        last_processed_id: undefined
-      }
-
-      if (dryRun) {
-        console.log('DRY RUN MODE - No data will be inserted')
-        migrationJob.status = 'completed'
-        return migrationJob
-      }
-
-      let hasMore = true
-      let lastId: string | undefined
-      let totalProcessed = 0
-      let totalFailed = 0
-      let allErrors: string[] = []
-
-      while (hasMore) {
-        try {
-          // Fetch batch of posts
-          const posts = await this.mongoService.fetchPosts({
-            limit: this.batchSize,
-            fromDate,
-            toDate,
-            lastId
-          })
-
-          if (posts.length === 0) {
-            hasMore = false
-            break
-          }
-
-          console.log(`Processing batch of ${posts.length} posts...`)
-
-          // Process batch
-          const batchResults = await this.processBatch(posts, channelId)
-          
-          totalProcessed += batchResults.successful + batchResults.skipped
-          totalFailed += batchResults.failed
-          allErrors.push(...batchResults.errors)
-
-          // Update progress
-          migrationJob.processed_records = totalProcessed
-          migrationJob.failed_records = totalFailed
-
-          // Update last processed ID for pagination
-          const lastPost = posts[posts.length - 1]
-          lastId = lastPost._id.toString()
-          migrationJob.last_processed_id = lastId
-
-          console.log(`Batch completed: ${batchResults.successful} success, ${batchResults.failed} failed, ${batchResults.skipped} skipped`)
-          console.log(`Total progress: ${totalProcessed}/${totalCount} (${Math.round(totalProcessed/totalCount*100)}%)`)
-
-          // Small delay between batches to avoid overwhelming the database
-          await new Promise(resolve => setTimeout(resolve, 100))
-
-        } catch (error) {
-          console.error('Error processing batch:', error)
-          migrationJob.status = 'failed'
-          migrationJob.error_message = error instanceof Error ? error.message : 'Unknown error'
-          break
-        }
-      }
-
-      // Finalize migration job
-      migrationJob.completed_at = new Date()
-      
-      if (migrationJob.status !== 'failed') {
-        migrationJob.status = 'completed'
-      }
-
-      console.log('Migration completed!')
-      console.log(`Total processed: ${totalProcessed}`)
-      console.log(`Total failed: ${totalFailed}`)
-      
-      if (allErrors.length > 0) {
-        console.log('Errors encountered:')
-        allErrors.slice(0, 10).forEach(error => console.log(`- ${error}`))
-        if (allErrors.length > 10) {
-          console.log(`... and ${allErrors.length - 10} more errors`)
-        }
-      }
-
-      return migrationJob
-
-    } finally {
-      await this.mongoService.disconnect()
-    }
-  }
-
-  // Resume migration from last processed ID
-  async resumeMigration(lastProcessedId: string, channelId: string): Promise<MigrationJob> {
-    console.log(`Resuming migration from ID: ${lastProcessedId}`)
-    
-    return this.migrateAllPosts({
-      channelName: 'MongoDB Import (Resumed)'
-    })
-  }
-
-  // Get migration statistics
-  async getMigrationStats(channelId: string): Promise<{
-    total_articles: number
-    analyzed_articles: number
-    migration_sources: string[]
-    latest_migration: Date | null
-  }> {
-    try {
-      const articles = await newsArticlesApi.getByChannelId(channelId, 1000)
-      
-      const stats = {
-        total_articles: articles.length,
-        analyzed_articles: articles.filter(a => a.analysis_completed).length,
-        migration_sources: [] as string[],
-        latest_migration: null as Date | null
-      }
-
-      // Extract migration sources and find latest migration
-      articles.forEach(article => {
-        if (article.migrated_at) {
-          const migrationDate = new Date(article.migrated_at)
-          if (!stats.latest_migration || migrationDate > stats.latest_migration) {
-            stats.latest_migration = migrationDate
-          }
-        }
-      })
-
-      return stats
-    } catch (error) {
-      console.error('Error getting migration stats:', error)
-      throw error
-    }
-  }
-
-  /**
-   * Transform MongoDB post to vector format
-   */
-  private transformToVector(
-    post: MongoPost, 
-    channelId: string,
-    supabaseArticleId: string
-  ): NewsArticleVector | null {
-    try {
-      // Validate required fields
-      if (!post.title || !post.content?.text) {
-        return null
-      }
-
-      const cleanContent = cleanHtmlContent(post.content.text)
-      if (cleanContent.length < 50) {
-        return null
-      }
-
-      return {
-        id: supabaseArticleId, // Use Supabase UUID as vector ID
-        channel_id: channelId,
-        title: post.title,
-        content: cleanContent,
-        published_at: post.published_at || post.created_at,
-        categories: post.categories || [],
-        topics: post.topics || [],
-        political_score: undefined, // Will be calculated later
-        event_category: this.categorizeEvent(post.title, cleanContent),
-        source_url: post.slug ? `/${post.slug}` : undefined,
-      }
-    } catch (error) {
-      console.error('Error transforming post to vector:', error)
-      return null
     }
   }
 
@@ -431,18 +136,14 @@ export class ETLService {
   }
 
   /**
-   * Migrate posts with vector database integration
+   * Vector-only migration - directly from MongoDB to Vector DB
    */
-  async migrateWithVectors(
-    channelId: string,
-    options: {
-      limit?: number
-      offset?: number
-      dateRange?: { start: Date; end: Date }
-      dryRun?: boolean
-      enableVectors?: boolean
-    } = {}
-  ): Promise<MigrationResult> {
+  async migrateToVectorOnly(options: {
+    limit?: number
+    offset?: number
+    dateRange?: { start: Date; end: Date }
+    dryRun?: boolean
+  } = {}): Promise<MigrationResult> {
     const startTime = Date.now()
     const result: MigrationResult = {
       success: true,
@@ -455,16 +156,21 @@ export class ETLService {
     }
 
     try {
-      console.log(`🚀 Starting migration with vector integration...`)
-      console.log(`   Channel ID: ${channelId}`)
+      console.log(`🚀 Starting Vector-Only Migration...`)
       console.log(`   Batch Size: ${this.batchSize}`)
-      console.log(`   Vector Integration: ${options.enableVectors ? 'ENABLED' : 'DISABLED'}`)
+      console.log(`   Target: Vector Database Only`)
 
-      // Initialize vector collection if enabled
-      if (options.enableVectors && this.vectorService) {
-        console.log('📦 Initializing vector collection...')
-        await this.vectorService.initializeCollection()
+      // Ensure MongoDB connection
+      const isConnected = await this.mongoService.healthCheck()
+      if (!isConnected) {
+        console.log('🔌 Establishing MongoDB connection...')
+        await this.mongoService.connect()
       }
+
+      // Initialize vector collection
+      console.log('📦 Initializing vector collection...')
+      await this.vectorService.initializeCollection()
+      console.log('✅ Vector collection ready')
 
       // Get total count for progress tracking
       const totalPosts = await this.mongoService.getPostCount(
@@ -474,12 +180,17 @@ export class ETLService {
       console.log(`📊 Total posts to process: ${totalPosts}`)
 
       let currentOffset = options.offset || 0
-      let vectorBatch: NewsArticleVector[] = []
 
-      while (currentOffset < totalPosts && (!options.limit || result.processed < options.limit)) {
-        const remainingLimit = options.limit ? Math.min(this.batchSize, options.limit - result.processed) : this.batchSize
+      // For testing: limit to first 500 records only
+      const testLimit = 500
+      const effectiveLimit = options.limit ? Math.min(options.limit, testLimit) : testLimit
+      
+      console.log(`🧪 TEST MODE: Processing only first ${effectiveLimit} records`)
+
+      while (currentOffset < totalPosts && result.processed < effectiveLimit) {
+        const remainingLimit = Math.min(this.batchSize, effectiveLimit - result.processed)
         
-        console.log(`📄 Processing batch: ${currentOffset + 1}-${currentOffset + remainingLimit}`)
+        console.log(`📄 Processing batch: ${currentOffset + 1}-${currentOffset + remainingLimit} (${remainingLimit} records this batch)`)
 
         // Fetch batch from MongoDB
         const posts = await this.mongoService.fetchPosts({
@@ -493,23 +204,29 @@ export class ETLService {
           console.log('✅ No more posts to process')
           break
         }
+    
+        console.log(`🔄 Processing ${posts.length} posts...`)
 
-        // Process batch
-        const batchResults: any[] = []
+        // Transform posts to vector format
+        const vectorArticles: NewsArticleVector[] = []
         
         for (const post of posts) {
           result.processed++
 
-          // Transform post
-          const transformation = this.transformPost(post, channelId)
+          console.log(`📝 Processing: ${post.title?.substring(0, 50)}... (ID: ${post._id})`)
+
+          // Transform to vector format
+          const transformation = this.transformPostToVector(post)
           
           if (transformation.skipped) {
             result.skipped++
+            console.log(`⏭️  SKIPPED: ${transformation.skip_reason}`)
             continue
           }
 
           if (!transformation.success || !transformation.data) {
             result.errors++
+            console.log(`❌ ERROR: ${transformation.error}`)
             result.error_details.push({
               post_id: post._id.toString(),
               error: transformation.error || 'Unknown transformation error'
@@ -517,101 +234,98 @@ export class ETLService {
             continue
           }
 
-          batchResults.push(transformation.data)
+          console.log(`✅ TRANSFORMED: Ready for vector storage`)
+          vectorArticles.push(transformation.data)
         }
 
-        // Insert to Supabase if not dry run
-        if (!options.dryRun && batchResults.length > 0) {
+        // Write batch to vector database
+        if (!options.dryRun && vectorArticles.length > 0) {
           try {
-            const { data: insertedArticles, error } = await this.supabase
-              .from('news_articles')
-              .insert(batchResults)
-              .select('id, title, content, published_at, categories, topics')
+            console.log(`🔮 Writing ${vectorArticles.length} articles to Vector Database...`)
+            
+            await this.vectorService.storeArticlesBatch(vectorArticles)
+            
+            result.inserted += vectorArticles.length
+            console.log(`✅ Successfully stored ${vectorArticles.length} vectors`)
 
-            if (error) {
-              console.error('❌ Supabase insert error:', error)
-              result.errors += batchResults.length
-              result.error_details.push({
-                post_id: 'batch',
-                error: error.message
-              })
-            } else {
-              result.inserted += insertedArticles?.length || 0
-              console.log(`✅ Inserted ${insertedArticles?.length} articles to Supabase`)
-
-              // Prepare vector batch if enabled
-              if (options.enableVectors && this.vectorService && insertedArticles) {
-                for (let i = 0; i < insertedArticles.length; i++) {
-                  const article = insertedArticles[i]
-                  const originalPost = posts[i]
-                  
-                  const vectorArticle = this.transformToVector(originalPost, channelId, article.id)
-                  if (vectorArticle) {
-                    vectorBatch.push(vectorArticle)
-                  }
-                }
-
-                // Process vector batch when it reaches batch size
-                if (vectorBatch.length >= this.batchSize) {
-                  console.log(`🔄 Processing vector batch of ${vectorBatch.length} articles...`)
-                  await this.vectorService.storeArticlesBatch(vectorBatch)
-                  vectorBatch = []
-                }
-              }
-            }
-          } catch (insertError) {
-            console.error('❌ Insert error:', insertError)
-            result.errors += batchResults.length
+          } catch (error) {
+            console.error('❌ Vector storage error:', error)
+            result.errors += vectorArticles.length
             result.error_details.push({
               post_id: 'batch',
-              error: insertError instanceof Error ? insertError.message : 'Unknown insert error'
+              error: error instanceof Error ? error.message : 'Unknown vector storage error'
             })
           }
         } else if (options.dryRun) {
-          result.inserted += batchResults.length
-          console.log(`🔍 Dry run: Would insert ${batchResults.length} articles`)
+          console.log(`🧪 DRY RUN: Would store ${vectorArticles.length} vectors`)
+          result.inserted += vectorArticles.length
         }
 
-        currentOffset += posts.length
+        // Update offset for next batch
+        currentOffset += remainingLimit
 
         // Progress update
-        const progress = Math.round((result.processed / totalPosts) * 100)
-        console.log(`📈 Progress: ${progress}% (${result.processed}/${totalPosts})`)
+        console.log(`📊 Progress: ${result.processed}/${effectiveLimit} processed, ${result.inserted} stored, ${result.skipped} skipped, ${result.errors} errors`)
+
+        // Small delay between batches
+        await new Promise(resolve => setTimeout(resolve, 100))
       }
 
-      // Process remaining vector batch
-      if (options.enableVectors && this.vectorService && vectorBatch.length > 0) {
-        console.log(`🔄 Processing final vector batch of ${vectorBatch.length} articles...`)
-        await this.vectorService.storeArticlesBatch(vectorBatch)
-      }
+      // Final statistics
+      const endTime = Date.now()
+      result.duration = Math.round((endTime - startTime) / 1000)
+      
+      console.log('')
+      console.log('🎯 VECTOR MIGRATION COMPLETED!')
+      console.log('═══════════════════════════════════════════')
+      console.log(`✅ Results:`)
+      console.log(`   • Total processed: ${result.processed}`)
+      console.log(`   • Vectors stored: ${result.inserted}`)
+      console.log(`   • Records skipped: ${result.skipped}`)
+      console.log(`   • Errors: ${result.errors}`)
+      console.log(`   • Duration: ${result.duration}s`)
+      console.log(`   • Speed: ${Math.round(result.processed / result.duration)} records/sec`)
 
-      result.duration = Date.now() - startTime
-      result.success = result.errors === 0
-
-      console.log(`🎯 Migration completed!`)
-      console.log(`   Duration: ${Math.round(result.duration / 1000)}s`)
-      console.log(`   Processed: ${result.processed}`)
-      console.log(`   Inserted: ${result.inserted}`)
-      console.log(`   Skipped: ${result.skipped}`)
-      console.log(`   Errors: ${result.errors}`)
-
-      if (options.enableVectors && this.vectorService) {
-        const stats = await this.vectorService.getCollectionStats()
-        console.log(`   Vector DB: ${stats.total_points} total points`)
+      // Get final vector database stats
+      try {
+        const finalStats = await this.vectorService.getCollectionStats()
+        console.log(``)
+        console.log(`📊 Vector Database Final Stats:`)
+        console.log(`   • Total vectors: ${finalStats.total_points}`)
+        console.log(`   • Indexed vectors: ${finalStats.indexed_points}`)
+        console.log(`   • Status: ${finalStats.status}`)
+      } catch (statsError) {
+        console.log(`   • Vector stats: Unable to retrieve`)
       }
 
       return result
 
     } catch (error) {
+      console.error('💥 Migration failed:', error)
       result.success = false
-      result.duration = Date.now() - startTime
-      result.error_details.push({
-        post_id: 'migration',
-        error: error instanceof Error ? error.message : 'Unknown migration error'
-      })
+      result.duration = Math.round((Date.now() - startTime) / 1000)
+      throw error
+    }
+  }
 
-      console.error('❌ Migration failed:', error)
-      return result
+  /**
+   * Get migration statistics
+   */
+  async getVectorMigrationStats(): Promise<{
+    total_vectors: number
+    indexed_vectors: number
+    collection_status: string
+  }> {
+    try {
+      const stats = await this.vectorService.getCollectionStats()
+      return {
+        total_vectors: stats.total_points,
+        indexed_vectors: stats.indexed_points,
+        collection_status: stats.status
+      }
+    } catch (error) {
+      console.error('Error getting vector migration stats:', error)
+      throw error
     }
   }
 } 

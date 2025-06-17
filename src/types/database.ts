@@ -27,6 +27,8 @@ export interface NewsArticle {
   vector_id?: string;
   analysis_completed: boolean;
   published_at?: string;
+  categories?: string[];
+  topics?: string[];
   migrated_at: string;
   created_at: string;
   updated_at: string;

@@ -72,7 +72,7 @@ async function testVectorDatabase() {
     // Test storing a sample article
     console.log('\n📝 Testing article storage...')
     const sampleArticle: NewsArticleVector = {
-      id: 'test-article-1',
+      id: '550e8400-e29b-41d4-a716-446655440001', // UUID format
       channel_id: 'test-channel',
       title: 'TCMB Politika Faizini Yükseltti',
       content: 'Türkiye Cumhuriyet Merkez Bankası (TCMB), politika faizini %17\'ye yükselterek enflasyonla mücadele kapsamında önemli bir adım attı. Bu karar, ekonomi uzmanları tarafından olumlu karşılandı.',
@@ -91,7 +91,7 @@ async function testVectorDatabase() {
     console.log('\n📦 Testing batch storage...')
     const batchArticles: NewsArticleVector[] = [
       {
-        id: 'test-article-2',
+        id: '550e8400-e29b-41d4-a716-446655440002', // UUID format
         channel_id: 'test-channel',
         title: 'Galatasaray Şampiyonlar Ligi\'nde',
         content: 'Galatasaray, Şampiyonlar Ligi\'nde önemli bir galibiyet elde ederek gruptan çıkma şansını artırdı. Sarı-kırmızılılar, taraftarlarını sevindirdi.',
@@ -101,7 +101,7 @@ async function testVectorDatabase() {
         event_category: 'sports'
       },
       {
-        id: 'test-article-3',
+        id: '550e8400-e29b-41d4-a716-446655440003', // UUID format
         channel_id: 'test-channel',
         title: 'Yapay Zeka Teknolojisinde Yeni Gelişmeler',
         content: 'Yapay zeka alanında yaşanan son gelişmeler, teknoloji sektörünü heyecanlandırıyor. Yeni algoritmalar, daha verimli çözümler sunuyor.',

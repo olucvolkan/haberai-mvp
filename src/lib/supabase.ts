@@ -1,10 +1,10 @@
 import {
-    ChannelProfile,
-    CreateChannelRequest,
-    EventTemplate,
-    GeneratedContent,
-    NewsArticle,
-    NewsChannel
+  ChannelProfile,
+  CreateChannelRequest,
+  EventTemplate,
+  GeneratedContent,
+  NewsArticle,
+  NewsChannel
 } from '@/types/database'
 import { createClient } from '@supabase/supabase-js'
 
@@ -271,24 +271,5 @@ export const supabaseUtils = {
       .single()
     
     return !error && !!data
-  },
-
-  // Get migration status
-  async getMigrationStatus(channelId: string): Promise<{ total: number, completed: number }> {
-    const { data: total } = await supabase
-      .from('news_articles')
-      .select('id', { count: 'exact' })
-      .eq('channel_id', channelId)
-
-    const { data: completed } = await supabase
-      .from('news_articles')
-      .select('id', { count: 'exact' })
-      .eq('channel_id', channelId)
-      .eq('analysis_completed', true)
-
-    return {
-      total: total?.length || 0,
-      completed: completed?.length || 0
-    }
   }
 } 

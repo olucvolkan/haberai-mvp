@@ -108,7 +108,8 @@ export interface TransformationResult {
     summary?: string
     published_at?: Date
     channel_id: string
-    source_metadata: Record<string, any>
+    categories?: string[]
+    topics?: string[]
   }
   error?: string
   skipped?: boolean

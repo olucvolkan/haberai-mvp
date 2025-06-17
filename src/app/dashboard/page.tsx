@@ -1,6 +1,5 @@
 'use client'
 
-import MigrationPanel from '@/components/MigrationPanel'
 import { newsChannelsApi } from '@/lib/supabase'
 import { NewsChannel } from '@/types/database'
 import { useEffect, useState } from 'react'
@@ -216,11 +215,6 @@ export default function Dashboard() {
             </div>
           </div>
         </div>
-      </div>
-
-      {/* Migration Panel */}
-      <div className="mt-8">
-        <MigrationPanel />
       </div>
     </div>
   )

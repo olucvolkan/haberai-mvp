@@ -18,7 +18,7 @@
     "deploy:staging": "vercel --target staging",
     "deploy:production": "vercel --prod",
     "test": "echo \"Error: no test specified\" && exit 1",
-    "test:migration": "tsx scripts/test-migration.ts",
+    "migrate": "source scripts/export-env.sh && tsx scripts/migrate-data.ts",
     "test:vector": "tsx scripts/test-vector.ts"
   },
   "keywords": [
